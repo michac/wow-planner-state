@@ -1,0 +1,3 @@
+# WoW writes these next to the addon during play; never commit them
+*.bak
+.DS_Store
