@@ -193,15 +193,35 @@ ns.ITEMS = ns.ITEMS or {
 -- ns.GENERATED_QUESTS (auto-wired from repeatables.json by the planner's
 -- gen_addon_quests tool — numeric-ID gated). Dedup by id, hand map first, so a
 -- verified slug never gets clobbered by a generated numeric label.
+-- Rolled-up objective progress (have/need) across a quest's countable objectives
+-- — e.g. prey's "Nightmare Hunts 1/3". Only available while the quest is in the
+-- log (GetQuestObjectives returns nil once turned in), so partial progress rides
+-- alongside the `complete` flag rather than replacing it. nil,nil when unknown.
+local function questProgress(id)
+  local objs = safe(C_QuestLog and C_QuestLog.GetQuestObjectives, id)
+  if type(objs) ~= "table" then return nil end
+  local have, need = 0, 0
+  for _, o in ipairs(objs) do
+    if type(o) == "table" and (o.numRequired or 0) > 0 then
+      have = have + (o.numFulfilled or 0)
+      need = need + o.numRequired
+    end
+  end
+  if need == 0 then return nil end
+  return have, need
+end
+
 local function scanQuests()
   local out, seen = {}, {}
   local function add(id, label)
     id = tonumber(id) or id
     if seen[id] then return end
     seen[id] = true
+    local have, need = questProgress(id)
     out[#out + 1] = {
       id = id, label = label,
       complete = safe(C_QuestLog and C_QuestLog.IsQuestFlaggedCompleted, id) or false,
+      have = have, need = need,
     }
   end
   for id, label in pairs(ns.WEEKLY_QUESTS) do add(id, label) end
@@ -305,7 +325,7 @@ local function capture()
              and equipCache or refreshEquip() or {}
 
   PlannerStateDB = {
-    schema = 4,
+    schema = 5,
     updated = safe(GetServerTime) or (time and time()) or 0,
     character = safe(UnitName, "player"),
     realm = safe(GetRealmName),
