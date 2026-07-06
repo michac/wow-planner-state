@@ -25,8 +25,10 @@ local function safe(fn, ...)
   return nil
 end
 
--- Enum.WeeklyRewardChestThresholdType → readable slot type.
-local VAULT_TYPE = { [1] = "raid", [2] = "dungeon", [3] = "world", [4] = "pvp" }
+-- Enum.WeeklyRewardChestThresholdType → readable slot type. Midnight reports the
+-- Mythic+/dungeon column as 6 (observed live: raid=1, world=3, dungeon=6); [2] is
+-- kept for backwards-compat in case an older/other client still uses it.
+local VAULT_TYPE = { [1] = "raid", [2] = "dungeon", [3] = "world", [4] = "pvp", [6] = "dungeon" }
 
 -- ------------------------------------------------------------------ scanners
 local function scanCurrencies()
