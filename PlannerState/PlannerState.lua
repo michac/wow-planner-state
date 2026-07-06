@@ -1,14 +1,21 @@
 --[[  PlannerState
       Captures the reset-state the Blizzard profile API can't see (Great Vault
       slot progress, M+ runs this week, raid lockouts, world-boss weekly kills,
-      per-currency weekly-earned, configured weekly quests + items, and the
-      in-game event calendar) and writes
-      it to SavedVariables so the session planner can subtract "what I've already
-      done this reset" and surface live/upcoming holiday events (the fun radar).
+      per-currency weekly-earned, per-slot equipment ilvls, configured weekly
+      quests + items, and the in-game event calendar) and writes it to
+      SavedVariables so the session planner can subtract "what I've already done
+      this reset", target the weakest gear slot, and surface live/upcoming
+      holiday events (the fun radar).
 
-      Data flows out on PLAYER_LOGOUT (always current at logout) or on demand
-      via /ps — SavedVariables only flush to disk on logout/reload, so after
-      /ps you still need /reload to persist.
+      WRITE MODEL — read this if a /ps seems to "not take":
+      SavedVariables only serialize to disk on /reload and on clean logout (a
+      crash / Alt-F4 writes nothing). capture() runs on BOTH /ps and
+      PLAYER_LOGOUT, and whichever ran last before the disk-write wins. So a
+      mid-session /ps that you never /reload'd is OVERWRITTEN by the logout
+      capture when you quit. To persist a mid-session snapshot: /ps then /reload
+      (not logout). For normal use just play and log out — the logout capture is
+      current. (equippedIlvl is exempt from the logout-unreliability that bit
+      pre-0.4: gear is snapshotted from a cache warmed in-world — see below.)
 
       Every game-API call is guarded: on a client where a function is missing
       the field is simply omitted rather than erroring the whole dump.
@@ -30,6 +37,48 @@ end
 -- Mythic+/dungeon column as 6 (observed live: raid=1, world=3, dungeon=6); [2] is
 -- kept for backwards-compat in case an older/other client still uses it.
 local VAULT_TYPE = { [1] = "raid", [2] = "dungeon", [3] = "world", [4] = "pvp", [6] = "dungeon" }
+
+-- Real gear slots (cosmetic shirt=4 / tabard=19 / defunct ranged=18 omitted) →
+-- readable name, for per-slot ilvl scanning (planner v2b weakest-slot targeting).
+local EQUIP_SLOTS = {
+  [1] = "head", [2] = "neck", [3] = "shoulder", [5] = "chest", [6] = "waist",
+  [7] = "legs", [8] = "feet", [9] = "wrist", [10] = "hands", [11] = "finger1",
+  [12] = "finger2", [13] = "trinket1", [14] = "trinket2", [15] = "back",
+  [16] = "mainhand", [17] = "offhand",
+}
+
+-- ------------------------------------------------------------------ equipment
+-- Item/ilvl APIs are UNRELIABLE at PLAYER_LOGOUT (the client is tearing down —
+-- this is why the pre-0.4 dump wrote equippedIlvl=0). So we snapshot equipment
+-- on stable in-world events (login + equipment change) into equipCache and have
+-- capture() reuse it, guaranteeing the logout write carries last-known-good gear.
+local equipCache = nil
+
+local function refreshEquip()
+  local slots = {}
+  for slotId, name in pairs(EQUIP_SLOTS) do
+    local link = safe(GetInventoryItemLink, "player", slotId)
+    if link then
+      slots[#slots + 1] = {
+        slot = name,
+        slotId = slotId,
+        ilvl = safe(C_Item and C_Item.GetDetailedItemLevelInfo, link),
+        itemID = safe(GetInventoryItemID, "player", slotId),
+      }
+    end
+  end
+  -- GetAverageItemLevel() → (overall, equipped, pvp)
+  local ok, overall, equipped = pcall(GetAverageItemLevel)
+  if #slots > 0 then  -- only overwrite a good cache with another good read
+    equipCache = {
+      slots = slots,
+      avgItemLevel = ok and overall or nil,
+      equippedIlvl = ok and equipped or nil,
+      updated = safe(GetServerTime),
+    }
+  end
+  return equipCache
+end
 
 -- ------------------------------------------------------------------ scanners
 local function scanCurrencies()
@@ -140,13 +189,24 @@ ns.ITEMS = ns.ITEMS or {
   -- [itemID]  = "label",   e.g. [246111] = "Spark of Radiance",
 }
 
+-- ns.WEEKLY_QUESTS (hand-verified, slug-labelled) takes precedence over
+-- ns.GENERATED_QUESTS (auto-wired from repeatables.json by the planner's
+-- gen_addon_quests tool — numeric-ID gated). Dedup by id, hand map first, so a
+-- verified slug never gets clobbered by a generated numeric label.
 local function scanQuests()
-  local out = {}
-  for id, label in pairs(ns.WEEKLY_QUESTS) do
+  local out, seen = {}, {}
+  local function add(id, label)
+    id = tonumber(id) or id
+    if seen[id] then return end
+    seen[id] = true
     out[#out + 1] = {
       id = id, label = label,
       complete = safe(C_QuestLog and C_QuestLog.IsQuestFlaggedCompleted, id) or false,
     }
+  end
+  for id, label in pairs(ns.WEEKLY_QUESTS) do add(id, label) end
+  if type(ns.GENERATED_QUESTS) == "table" then
+    for id, label in pairs(ns.GENERATED_QUESTS) do add(id, label) end
   end
   return out
 end
@@ -239,17 +299,22 @@ end
 -- ------------------------------------------------------------------- capture
 local function capture()
   local _, classFile = pcall(function() return select(2, UnitClass("player")) end)
-  local _, equippedIL = pcall(function() return select(2, GetAverageItemLevel()) end)
+  -- Prefer the cache warmed in-world; only scan live if it's still empty (e.g.
+  -- /ps fired before the login refresh landed). Never trust a logout-time scan.
+  local eq = (equipCache and equipCache.slots and #equipCache.slots > 0)
+             and equipCache or refreshEquip() or {}
 
   PlannerStateDB = {
-    schema = 3,
+    schema = 4,
     updated = safe(GetServerTime) or (time and time()) or 0,
     character = safe(UnitName, "player"),
     realm = safe(GetRealmName),
     faction = safe(UnitFactionGroup, "player"),
     class = classFile,
     level = safe(UnitLevel, "player"),
-    equippedIlvl = equippedIL,
+    equippedIlvl = eq.equippedIlvl,
+    avgItemLevel = eq.avgItemLevel,
+    equipment = eq.slots,
     money = safe(GetMoney),
     secondsUntilWeeklyReset = safe(C_DateAndTime and C_DateAndTime.GetSecondsUntilWeeklyReset),
     vault = scanVault(),
@@ -268,9 +333,14 @@ end
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("PLAYER_LOGOUT")
+frame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 frame:SetScript("OnEvent", function(_, event)
   if event == "PLAYER_LOGIN" then
     safe(C_Calendar and C_Calendar.OpenCalendar)  -- prime async calendar load
+    -- Item data isn't fully loaded at login; warm the equip cache a beat later.
+    if C_Timer and C_Timer.After then C_Timer.After(2, refreshEquip) else refreshEquip() end
+  elseif event == "PLAYER_EQUIPMENT_CHANGED" then
+    refreshEquip()
   else  -- PLAYER_LOGOUT
     pcall(capture)  -- never let a scan error block logout / the save
   end
