@@ -1,7 +1,8 @@
 --[[  PlannerState
       Captures the reset-state the Blizzard profile API can't see (Great Vault
-      slot progress, M+ runs this week, raid lockouts, per-currency weekly-earned,
-      configured weekly quests + items, and the in-game event calendar) and writes
+      slot progress, M+ runs this week, raid lockouts, world-boss weekly kills,
+      per-currency weekly-earned, configured weekly quests + items, and the
+      in-game event calendar) and writes
       it to SavedVariables so the session planner can subtract "what I've already
       done this reset" and surface live/upcoming holiday events (the fun radar).
 
@@ -95,6 +96,23 @@ local function scanLockouts()
         name = name, difficulty = diffName, isRaid = isRaid,
         defeated = defeated, maxBosses = maxBosses, resetsIn = reset,
       }
+    end
+  end
+  return out
+end
+
+-- World bosses are NOT returned by GetSavedInstanceInfo (scanLockouts is blind to
+-- them — which is why candidates.json's old {type:lockout,name_contains:world}
+-- gate never fired). GetSavedWorldBossInfo(i) lists ONLY bosses you've already
+-- KILLED this reset, i.e. the weekly world-boss lockout signal itself. The planner
+-- reads this under the top-level `worldBosses` key (world_boss_weekly gate).
+local function scanWorldBosses()
+  local out = {}
+  local n = safe(GetNumSavedWorldBosses) or 0
+  for i = 1, n do
+    local ok, name, worldBossID = pcall(GetSavedWorldBossInfo, i)
+    if ok and name then
+      out[#out + 1] = { name = name, id = worldBossID }
     end
   end
   return out
@@ -224,7 +242,7 @@ local function capture()
   local _, equippedIL = pcall(function() return select(2, GetAverageItemLevel()) end)
 
   PlannerStateDB = {
-    schema = 2,
+    schema = 3,
     updated = safe(GetServerTime) or (time and time()) or 0,
     character = safe(UnitName, "player"),
     realm = safe(GetRealmName),
@@ -237,6 +255,7 @@ local function capture()
     vault = scanVault(),
     mythicPlus = scanMythicPlus(),
     lockouts = scanLockouts(),
+    worldBosses = scanWorldBosses(),
     currencies = scanCurrencies(),
     weeklyQuests = scanQuests(),
     items = scanItems(),
