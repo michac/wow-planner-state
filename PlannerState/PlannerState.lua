@@ -239,6 +239,35 @@ local function scanItems()
   return out
 end
 
+-- ------------------------------------------------------------- active quest log
+-- The FULL set of quests currently ACCEPTED (not yet turned in), so the planner
+-- can discover weeklies/dailies/campaign quests without a hand-maintained
+-- watchlist. Complements scanQuests(): the watchlist detects completion AFTER a
+-- quest leaves the log (IsQuestFlaggedCompleted), while this sees only in-progress
+-- quests but needs zero curation — the planner cross-references the two, and
+-- auto-promotes unknown weekly-frequency IDs it sees here into its master list.
+-- `frequency` is the raw Enum.QuestFrequency (0 default / 1 daily / 2 weekly);
+-- dumped raw so plan.py owns the interpretation. Headers are skipped.
+local function scanQuestLog()
+  local out = {}
+  local n = safe(C_QuestLog and C_QuestLog.GetNumQuestLogEntries) or 0
+  for i = 1, n do
+    local info = safe(C_QuestLog.GetInfo, i)
+    if type(info) == "table" and not info.isHeader and info.questID and info.questID > 0 then
+      local have, need = questProgress(info.questID)
+      out[#out + 1] = {
+        id = info.questID,
+        title = info.title,
+        frequency = info.frequency,   -- Enum.QuestFrequency: 0 default, 1 daily, 2 weekly
+        campaign = info.campaignID,   -- >0 when the quest belongs to a campaign
+        isComplete = safe(C_QuestLog.IsComplete, info.questID) or false,  -- objectives done, ready to hand in
+        have = have, need = need,
+      }
+    end
+  end
+  return out
+end
+
 -- ------------------------------------------------------------------ calendar
 -- The in-game event calendar (HOLIDAY events: Timewalking, Darkmoon Faire, world
 -- events, micro-holidays) is the ONLY source for what's live/upcoming — it is
@@ -325,7 +354,7 @@ local function capture()
              and equipCache or refreshEquip() or {}
 
   PlannerStateDB = {
-    schema = 5,
+    schema = 6,
     updated = safe(GetServerTime) or (time and time()) or 0,
     character = safe(UnitName, "player"),
     realm = safe(GetRealmName),
@@ -343,6 +372,7 @@ local function capture()
     worldBosses = scanWorldBosses(),
     currencies = scanCurrencies(),
     weeklyQuests = scanQuests(),
+    activeQuests = scanQuestLog(),
     items = scanItems(),
     calendar = scanCalendar(),
   }
