@@ -178,6 +178,18 @@ ns.WEEKLY_QUESTS = ns.WEEKLY_QUESTS or {
   [94385] = "void_assault",   -- "Void Assaults: Eversong Woods"  (rotates weekly with 94386) [high]
   [94386] = "void_assault",   -- "Void Assaults: Zul'Aman"        (rotates weekly with 94385) [high]
 
+  -- Hand-vetted from the active-quest-log discovery (2026-07-09, off Uncomplete's
+  -- live log — ID<->title confirmed by the dump, so no false-"done" risk). Slugs
+  -- are intentionally UNIQUE (not reusing candidate gate slugs) so these only
+  -- track completion / stop re-discovery and can't accidentally gate a candidate.
+  -- Promote a slug to a real candidate gate only after confirming the mapping.
+  [95843] = "ritual_sites_weekly",  -- "Midnight: Ritual Sites"  (weekly ritual pillar)      [high]
+  [93595] = "delve_call_weekly",    -- "A Call to Delves"        (weekly delve)               [high]
+  [93755] = "nalorakk_weekly",      -- "Den of Nalorakk"         (weekly dungeon)             [high]
+  [94390] = "special_assignment",   -- "Special Assignment: A Hunter's Regret"                [high]
+  [82146] = "special_assignment",   -- "Special Assignment: Cinderbee Surge"                  [high]
+  [82156] = "special_assignment",   -- "Special Assignment: When the Deeps Stir"              [high]
+
   -- UNRESOLVED — leads only, deliberately NOT active (would false-report done):
   --   delve_weekly_cache   : 93909 "Midnight: Delves" is a spark-PILLAR meta, not the bountiful-cache quest — unconfirmed
   --   housing_weekly       : 93769 "Midnight: Housing" is the spark-pillar wrapper; the "from Vaeli" quest-of-week rotates
@@ -247,7 +259,10 @@ end
 -- quests but needs zero curation — the planner cross-references the two, and
 -- auto-promotes unknown weekly-frequency IDs it sees here into its master list.
 -- `frequency` is the raw Enum.QuestFrequency (0 default / 1 daily / 2 weekly);
--- dumped raw so plan.py owns the interpretation. Headers are skipped.
+-- dumped raw so plan.py owns the interpretation. `classification` is the raw
+-- Enum.QuestClassification and `important` is the derived flag for Blizzard's
+-- "Important" tag (the purple-! in the UI) — a strong "this matters" signal the
+-- planner/discovery can rank on. Headers are skipped.
 local function scanQuestLog()
   local out = {}
   local n = safe(C_QuestLog and C_QuestLog.GetNumQuestLogEntries) or 0
@@ -255,12 +270,16 @@ local function scanQuestLog()
     local info = safe(C_QuestLog.GetInfo, i)
     if type(info) == "table" and not info.isHeader and info.questID and info.questID > 0 then
       local have, need = questProgress(info.questID)
+      local cls = safe(C_QuestInfoSystem and C_QuestInfoSystem.GetQuestClassification, info.questID)
       out[#out + 1] = {
         id = info.questID,
         title = info.title,
         frequency = info.frequency,   -- Enum.QuestFrequency: 0 default, 1 daily, 2 weekly
         campaign = info.campaignID,   -- >0 when the quest belongs to a campaign
         isComplete = safe(C_QuestLog.IsComplete, info.questID) or false,  -- objectives done, ready to hand in
+        classification = cls,         -- raw Enum.QuestClassification (Important/Campaign/Legendary/Meta/…)
+        important = (Enum and Enum.QuestClassification
+                     and cls == Enum.QuestClassification.Important) or false,  -- purple-! tag
         have = have, need = need,
       }
     end
@@ -354,7 +373,7 @@ local function capture()
              and equipCache or refreshEquip() or {}
 
   PlannerStateDB = {
-    schema = 6,
+    schema = 7,
     updated = safe(GetServerTime) or (time and time()) or 0,
     character = safe(UnitName, "player"),
     realm = safe(GetRealmName),
