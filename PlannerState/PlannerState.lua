@@ -294,7 +294,9 @@ ns.WEEKLY_QUESTS = ns.WEEKLY_QUESTS or {
   --   liadrin_spark        : several Liadrin spark weeklies (93744 / 95245 / pillars) — couldn't confirm which
 }
 ns.ITEMS = ns.ITEMS or {
-  -- [itemID]  = "label",   e.g. [246111] = "Spark of Radiance",
+  -- [itemID] = "label" — dumped via GetItemCount (count-in-bags+bank). Verify each ID
+  -- against the live build; a wrong ID silently dumps the wrong item's count.
+  [232875] = "spark_of_radiance",  -- Spark of Radiance — S1 crafting spark (verified item API 2026-07-10)
 }
 
 -- ns.WEEKLY_QUESTS (hand-verified, slug-labelled) takes precedence over
