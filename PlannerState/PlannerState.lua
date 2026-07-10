@@ -1,7 +1,8 @@
 --[[  PlannerState
       Captures the reset-state the Blizzard profile API can't see (Great Vault
       slot progress, M+ runs this week, raid lockouts, world-boss weekly kills,
-      per-currency weekly-earned, per-slot equipment ilvls, configured weekly
+      per-currency weekly-earned, per-slot equipment ilvls + upgrade track/step
+      ("Champion 5/6"), the "…of the Dawn" upgrade achievements, configured weekly
       quests + items, and the in-game event calendar) and writes it to
       SavedVariables so the session planner can subtract "what I've already done
       this reset", target the weakest gear slot, and surface live/upcoming
@@ -47,11 +48,43 @@ local EQUIP_SLOTS = {
   [16] = "mainhand", [17] = "offhand",
 }
 
+-- ------------------------------------------------------------ upgrade track
+-- The profile API + GetDetailedItemLevelInfo give a slot's ilvl but NOT its
+-- upgrade TRACK/step ("Champion 5/6" vs "Hero 1/6") — and those two collide at
+-- ilvl 259, so ilvl alone can't tell them apart or say how much crest headroom a
+-- slot has. C_ItemUpgrade.GetItemUpgradeItemInfo only reads the item in the open
+-- upgrade UI (useless headless), so instead we read the item's own tooltip:
+-- C_TooltipInfo.GetInventoryItem returns structured lines, and the upgrade line
+-- reads "<Track> <cur>/<max>" (enUS Season-1 Dawn track names). Returns nil when
+-- the API/line is absent so the slot simply omits the fields (graceful degrade).
+local UPGRADE_TRACKS = {
+  Adventurer = true, Veteran = true, Champion = true, Hero = true, Myth = true,
+}
+local function slotUpgrade(slotId)
+  local getter = C_TooltipInfo and C_TooltipInfo.GetInventoryItem
+  if type(getter) ~= "function" then return nil end
+  local data = safe(getter, "player", slotId)
+  if type(data) ~= "table" or type(data.lines) ~= "table" then return nil end
+  for _, line in ipairs(data.lines) do
+    local txt = type(line) == "table" and line.leftText
+    if type(txt) == "string" then
+      -- match anywhere in the line so a "Upgrade Level: " prefix is tolerated
+      for word, cur, max in txt:gmatch("(%a+)%s+(%d+)/(%d+)") do
+        if UPGRADE_TRACKS[word] then
+          return word, tonumber(cur), tonumber(max), txt
+        end
+      end
+    end
+  end
+  return nil
+end
+
 -- ------------------------------------------------------------------ equipment
 -- Item/ilvl APIs are UNRELIABLE at PLAYER_LOGOUT (the client is tearing down —
 -- this is why the pre-0.4 dump wrote equippedIlvl=0). So we snapshot equipment
 -- on stable in-world events (login + equipment change) into equipCache and have
 -- capture() reuse it, guaranteeing the logout write carries last-known-good gear.
+-- (The tooltip-based track read rides the same cache, so it's read in-world too.)
 local equipCache = nil
 
 local function refreshEquip()
@@ -59,11 +92,16 @@ local function refreshEquip()
   for slotId, name in pairs(EQUIP_SLOTS) do
     local link = safe(GetInventoryItemLink, "player", slotId)
     if link then
+      local track, ulevel, umax, utext = slotUpgrade(slotId)
       slots[#slots + 1] = {
         slot = name,
         slotId = slotId,
         ilvl = safe(C_Item and C_Item.GetDetailedItemLevelInfo, link),
         itemID = safe(GetInventoryItemID, "player", slotId),
+        track = track,             -- "Champion" | "Hero" | … (nil if unreadable)
+        upgradeLevel = ulevel,     -- current step, e.g. 5
+        upgradeMax = umax,         -- track ceiling steps, e.g. 6
+        upgradeText = utext,       -- raw tooltip line — parser fallback
       }
     end
   end
@@ -81,6 +119,17 @@ local function refreshEquip()
 end
 
 -- ------------------------------------------------------------------ scanners
+-- Off-list ("hidden") currencies the visible currency panel doesn't enumerate,
+-- so the GetCurrencyListInfo walk below never sees them (same blind spot that
+-- makes Syndicator miss catalyst charges). Read each directly by ID via
+-- GetCurrencyInfo and append. ⚠ Only add IDs VERIFIED against the live build
+-- (wago CurrencyTypes) — a wrong ID dumps garbage, worse than a gap. STILL TO
+-- DATAMINE: catalyst charges, Ascendant Voidshards (see knowledge/_meta/kb-inbox.md).
+ns.HIDDEN_CURRENCY_IDS = ns.HIDDEN_CURRENCY_IDS or {
+  -- [<id>] = "Catalyst Charge",
+  -- [<id>] = "Ascendant Voidshard",
+}
+
 local function scanCurrencies()
   local out = {}
   local size = safe(C_CurrencyInfo and C_CurrencyInfo.GetCurrencyListSize) or 0
@@ -95,6 +144,53 @@ local function scanCurrencies()
         weekly = info.quantityEarnedThisWeek,
         weeklyMax = info.maxWeeklyQuantity,
       }
+    end
+  end
+  -- append the hidden-by-ID currencies (mechanism ships even while the table is
+  -- empty; fill ns.HIDDEN_CURRENCY_IDS once the IDs are datamined)
+  local getInfo = C_CurrencyInfo and C_CurrencyInfo.GetCurrencyInfo
+  if type(getInfo) == "function" and type(ns.HIDDEN_CURRENCY_IDS) == "table" then
+    for id, label in pairs(ns.HIDDEN_CURRENCY_IDS) do
+      local info = safe(getInfo, id)
+      if info and (info.quantity or 0) >= 0 then
+        out[#out + 1] = {
+          id = id,
+          name = info.name or label,
+          quantity = info.quantity,
+          max = info.maxQuantity,
+          weekly = info.quantityEarnedThisWeek,
+          weeklyMax = info.maxWeeklyQuantity,
+          hidden = true,
+        }
+      end
+    end
+  end
+  return out
+end
+
+-- --------------------------------------------------------------- achievements
+-- Account-wide "…of the Dawn" upgrade-track achievements. Each, once earned,
+-- grants the 50% warband Dawncrest discount for that track (and unlocks the
+-- Vaskarn crest-trade). Reading `completed` tells the planner directly whether
+-- the discount is live, instead of inferring it from whether every slot hit the
+-- track's ceiling ilvl. IDs from wago Achievement DB2 (live 12.0.7);
+-- GetAchievementInfo is account-wide. See knowledge/endgame/dawncrests.md.
+ns.DAWN_ACHIEVEMENTS = ns.DAWN_ACHIEVEMENTS or {
+  [61809] = "adventurer",  -- 237 in every slot
+  [42767] = "veteran",     -- 250
+  [42768] = "champion",    -- 263  (unlocks the 50% Champion discount)
+  [42769] = "hero",        -- 276
+  [42770] = "myth",        -- 285
+}
+local function scanAchievements()
+  if type(GetAchievementInfo) ~= "function" then return nil end
+  local out = {}
+  for id, label in pairs(ns.DAWN_ACHIEVEMENTS) do
+    -- GetAchievementInfo → id, name, points, completed, ... (multi-return, so
+    -- pcall directly rather than via safe(), which keeps only the first value)
+    local ok, aid, _name, _points, completed = pcall(GetAchievementInfo, id)
+    if ok and aid then
+      out[#out + 1] = { id = id, label = label, completed = completed or false }
     end
   end
   return out
@@ -373,7 +469,7 @@ local function capture()
              and equipCache or refreshEquip() or {}
 
   PlannerStateDB = {
-    schema = 7,
+    schema = 8,
     updated = safe(GetServerTime) or (time and time()) or 0,
     character = safe(UnitName, "player"),
     realm = safe(GetRealmName),
@@ -390,6 +486,7 @@ local function capture()
     lockouts = scanLockouts(),
     worldBosses = scanWorldBosses(),
     currencies = scanCurrencies(),
+    achievements = scanAchievements(),
     weeklyQuests = scanQuests(),
     activeQuests = scanQuestLog(),
     items = scanItems(),
