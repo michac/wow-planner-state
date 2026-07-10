@@ -292,12 +292,13 @@ ns.WEEKLY_QUESTS = ns.WEEKLY_QUESTS or {
   --   dungeon_weekly       : Halduron Brightwing 1500-rep weekly — name/ID not exposed by any source
   --   liadrin_spark        : several Liadrin spark weeklies (93744 / 95245 / pillars) — couldn't confirm which
 }
-ns.ITEMS = ns.ITEMS or {
-  -- [itemID] = "label" — dumped via GetItemCount (count-in-bags+bank). Verify each ID
-  -- against the live build; a wrong ID silently dumps the wrong item's count.
-  [232875] = "spark_of_radiance",    -- Spark of Radiance — S1 crafting spark (verified item API 2026-07-10)
-  [268650] = "ascendant_voidshard",  -- Ascendant Voidshard — 5 → 1 Voidcore, weapon/trinket overcap mat (verified 2026-07-10)
-}
+-- Intentionally EMPTY. Item counts (sparks, voidshards, any mat) are sourced from
+-- the **Syndicator** addon's SavedVariables — which already tracks the full bag +
+-- bank + warband-bank inventory account-wide — via wowkb.charstate/character. So the
+-- planner needs no curated per-item ID list here (that just risked gaps + churn).
+-- scanItems stays as a dump-only offline fallback; add an ID only if a specific item
+-- must ride the dump when Syndicator is unavailable.
+ns.ITEMS = ns.ITEMS or {}
 
 -- ns.WEEKLY_QUESTS (hand-verified, slug-labelled) takes precedence over
 -- ns.GENERATED_QUESTS (auto-wired from repeatables.json by the planner's
