@@ -119,16 +119,15 @@ local function refreshEquip()
 end
 
 -- ------------------------------------------------------------------ scanners
--- Off-list ("hidden") currencies the visible currency panel doesn't enumerate,
--- so the GetCurrencyListInfo walk below never sees them (same blind spot that
--- makes Syndicator miss catalyst charges). Read each directly by ID via
--- GetCurrencyInfo and append. ⚠ Only add IDs VERIFIED against the live build
--- (wago CurrencyTypes) — a wrong ID dumps garbage, worse than a gap. STILL TO
--- DATAMINE: catalyst charges, Ascendant Voidshards (see knowledge/_meta/kb-inbox.md).
-ns.HIDDEN_CURRENCY_IDS = ns.HIDDEN_CURRENCY_IDS or {
-  -- [<id>] = "Catalyst Charge",
-  -- [<id>] = "Ascendant Voidshard",
-}
+-- Off-list ("hidden") currencies the visible currency panel doesn't enumerate, so
+-- the GetCurrencyListInfo walk below never sees them. Read each directly by ID via
+-- GetCurrencyInfo and append. ⚠ Only add IDs VERIFIED against the live build (wago
+-- CurrencyTypes) — a wrong ID dumps garbage, worse than a gap.
+-- Note (2026-07-10 datamine): the two we thought were hidden currencies aren't —
+-- **catalyst charges = "Dawnlight Manaflux" (3378), a VISIBLE currency already
+-- captured by scanCurrencies**, and **Ascendant Voidshard is an ITEM** (268650, in
+-- ns.ITEMS). Table stays empty until a genuine off-list currency turns up.
+ns.HIDDEN_CURRENCY_IDS = ns.HIDDEN_CURRENCY_IDS or {}
 
 local function scanCurrencies()
   local out = {}
@@ -296,7 +295,8 @@ ns.WEEKLY_QUESTS = ns.WEEKLY_QUESTS or {
 ns.ITEMS = ns.ITEMS or {
   -- [itemID] = "label" — dumped via GetItemCount (count-in-bags+bank). Verify each ID
   -- against the live build; a wrong ID silently dumps the wrong item's count.
-  [232875] = "spark_of_radiance",  -- Spark of Radiance — S1 crafting spark (verified item API 2026-07-10)
+  [232875] = "spark_of_radiance",    -- Spark of Radiance — S1 crafting spark (verified item API 2026-07-10)
+  [268650] = "ascendant_voidshard",  -- Ascendant Voidshard — 5 → 1 Voidcore, weapon/trinket overcap mat (verified 2026-07-10)
 }
 
 -- ns.WEEKLY_QUESTS (hand-verified, slug-labelled) takes precedence over
