@@ -195,6 +195,39 @@ local function scanAchievements()
   return out
 end
 
+-- Meta achievements we want *criterion progress* for, not just completed —
+-- e.g. the Turbulent Timeways mount meta, whose single week-counter criterion
+-- reads "weeks of Mastery earned / needed". A carried-over Mastery *aura* does
+-- not bank a week; only the criterion increments, so this (not the buff) is the
+-- source of truth for mount progress. Account-wide + survives logout.
+-- See knowledge/planning/activities/turbulent-timeways.md.
+ns.META_ACHIEVEMENTS = ns.META_ACHIEVEMENTS or {
+  [61463] = "timeways_v",  -- Master of the Turbulent Timeways V → Spawn of Vyranoth (4 weeks)
+}
+local function scanMetaAchievements()
+  if type(GetAchievementInfo) ~= "function"
+     or type(GetAchievementCriteriaInfo) ~= "function" then return nil end
+  local out = {}
+  for id, label in pairs(ns.META_ACHIEVEMENTS) do
+    local ok, aid, _name, _points, completed = pcall(GetAchievementInfo, id)
+    if ok and aid then
+      -- Criterion 1 is the progress counter. GetAchievementCriteriaInfo →
+      -- string, type, completed, quantity, reqQuantity, ... (multi-return, so
+      -- pcall directly rather than via safe(), which keeps only the first value).
+      local cok, _cstr, _ctype, _cdone, quantity, reqQuantity =
+        pcall(GetAchievementCriteriaInfo, id, 1)
+      out[#out + 1] = {
+        id = id,
+        label = label,
+        completed = completed or false,
+        earned = (cok and quantity) or nil,
+        needed = (cok and reqQuantity) or nil,
+      }
+    end
+  end
+  return out
+end
+
 local function scanVault()
   local acts = safe(C_WeeklyRewards and C_WeeklyRewards.GetActivities)
   if not acts then return nil end
@@ -472,7 +505,7 @@ local function capture()
              and equipCache or refreshEquip() or {}
 
   PlannerStateDB = {
-    schema = 8,
+    schema = 9,
     updated = safe(GetServerTime) or (time and time()) or 0,
     character = safe(UnitName, "player"),
     realm = safe(GetRealmName),
@@ -490,6 +523,7 @@ local function capture()
     worldBosses = scanWorldBosses(),
     currencies = scanCurrencies(),
     achievements = scanAchievements(),
+    metaAchievements = scanMetaAchievements(),
     weeklyQuests = scanQuests(),
     activeQuests = scanQuestLog(),
     items = scanItems(),
