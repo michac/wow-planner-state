@@ -228,6 +228,24 @@ local function scanMetaAchievements()
   return out
 end
 
+-- Achievement *criteria* stream in from the server lazily — the first
+-- GetAchievementCriteriaInfo call for an achievement can return nil until the
+-- data arrives (via CRITERIA_UPDATE) a moment later. Loading the achievement UI
+-- and issuing throwaway reads at login primes the cache so scanMetaAchievements()
+-- has real quantity/reqQuantity numbers by the time /ps runs.
+local function warmAchievements()
+  if C_AddOns and C_AddOns.LoadAddOn then
+    pcall(C_AddOns.LoadAddOn, "Blizzard_AchievementUI")
+  elseif UIParentLoadAddOn then
+    pcall(UIParentLoadAddOn, "Blizzard_AchievementUI")
+  end
+  if type(GetAchievementCriteriaInfo) == "function" then
+    for id in pairs(ns.META_ACHIEVEMENTS or {}) do
+      pcall(GetAchievementCriteriaInfo, id, 1)  -- discard; triggers the fetch
+    end
+  end
+end
+
 local function scanVault()
   local acts = safe(C_WeeklyRewards and C_WeeklyRewards.GetActivities)
   if not acts then return nil end
@@ -540,8 +558,13 @@ frame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 frame:SetScript("OnEvent", function(_, event)
   if event == "PLAYER_LOGIN" then
     safe(C_Calendar and C_Calendar.OpenCalendar)  -- prime async calendar load
-    -- Item data isn't fully loaded at login; warm the equip cache a beat later.
-    if C_Timer and C_Timer.After then C_Timer.After(2, refreshEquip) else refreshEquip() end
+    warmAchievements()                             -- prime achievement criteria (stream in lazily)
+    -- Item/achievement data isn't fully loaded at login; warm again a beat later.
+    if C_Timer and C_Timer.After then
+      C_Timer.After(2, function() refreshEquip(); warmAchievements() end)
+    else
+      refreshEquip()
+    end
   elseif event == "PLAYER_EQUIPMENT_CHANGED" then
     refreshEquip()
   else  -- PLAYER_LOGOUT
