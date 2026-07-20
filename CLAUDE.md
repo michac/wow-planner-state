@@ -31,7 +31,13 @@ Standard flow for any user-facing change:
    ```
    (`gh` can create releases non-interactively; the tag should match the `.toc`
    Version, prefixed with `v`.)
-7. On the game machine: `ghaddons update michac/wow-planner-state`, then in-game
+7. Deploy — pulls the release into `Interface/AddOns/`. Runnable from any
+   directory (ghaddons keeps its config next to its own package, not in the cwd),
+   from WSL or from Windows `python`:
+   ```bash
+   PYTHONPATH=~/code/fun/wow/addon-manager python3 -m ghaddons.cli update michac/wow-planner-state
+   ```
+   Confirm with `... list` (should read `ok` at the new version), then in-game
    `/ps` + `/reload` to write the new dump.
 
 Keep the tag, the `.toc` Version, and the release title in sync.
