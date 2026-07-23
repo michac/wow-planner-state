@@ -2,7 +2,7 @@
 ## Title: Planner State
 ## Notes: Dumps weekly + character state to SavedVariables for the WoW session planner.
 ## Author: michac
-## Version: 0.7.1
+## Version: 0.7.2
 ## SavedVariablesPerCharacter: PlannerStateDB
 ## IconTexture: Interface\ICONS\INV_Misc_Note_01
 
