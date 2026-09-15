@@ -468,10 +468,13 @@ local function scanCalendar()
 
   -- Anchor the browsing baseline on the current real month, then walk this
   -- month (from today onward) + next month, collecting HOLIDAY events. A
-  -- multi-day holiday shows up as one day-event per day it spans, so dedupe by
-  -- title, keeping the widest start..end seen.
+  -- multi-day holiday shows up as one day-event per day it spans, so rows
+  -- dedupe on eventID, keeping the widest start..end seen. The key is the ID
+  -- because distinct holidays share one localized name: "Timewalking Dungeon
+  -- Event" titles every such week, and a title key merges them into one span.
+  -- A non-scalar eventID cannot index by value, so it keys on the title.
   safe(Cal.SetAbsMonth, now.month, now.year)
-  local byTitle = {}
+  local byEvent, order = {}, {}
   for _, mo in ipairs({ 0, 1 }) do
     local mi = safe(Cal.GetMonthInfo, mo)
     local numDays = (type(mi) == "table" and mi.numDays) or 0
@@ -481,13 +484,21 @@ local function scanCalendar()
       for i = 1, nEvents do
         local ev = safe(Cal.GetDayEvent, mo, day, i)
         if type(ev) == "table" and ev.calendarType == "HOLIDAY" and ev.title then
+          local idType = type(ev.eventID)
+          local scalarID = (idType == "number" or idType == "string") and ev.eventID or nil
+          local key = scalarID or ev.title
           local sRank, eRank = timeRank(ev.startTime), timeRank(ev.endTime)
-          local rec = byTitle[ev.title]
+          local rec = byEvent[key]
           if not rec then
-            byTitle[ev.title] = {
-              title = ev.title, startRank = sRank, endRank = eRank,
+            local hol = safe(Cal.GetHolidayInfo, mo, day, i)
+            rec = {
+              title = ev.title, eventID = scalarID,
+              texture = (type(hol) == "table" and hol.texture) or ev.iconTexture,
+              startRank = sRank, endRank = eRank,
               startTime = isoDate(ev.startTime), endTime = isoDate(ev.endTime),
             }
+            byEvent[key] = rec
+            order[#order + 1] = rec
           else
             if sRank and (not rec.startRank or sRank < rec.startRank) then
               rec.startRank, rec.startTime = sRank, isoDate(ev.startTime)
@@ -502,9 +513,11 @@ local function scanCalendar()
   end
 
   local out = {}
-  for _, rec in pairs(byTitle) do
+  for _, rec in ipairs(order) do
     out[#out + 1] = {
       title = rec.title,
+      eventID = rec.eventID,
+      texture = rec.texture,
       active = (nowRank and rec.startRank and rec.endRank
                 and rec.startRank <= nowRank and nowRank <= rec.endRank) or false,
       startTime = rec.startTime,
@@ -523,7 +536,7 @@ local function capture()
              and equipCache or refreshEquip() or {}
 
   PlannerStateDB = {
-    schema = 9,
+    schema = 10,
     updated = safe(GetServerTime) or (time and time()) or 0,
     character = safe(UnitName, "player"),
     realm = safe(GetRealmName),
