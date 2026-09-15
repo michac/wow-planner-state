@@ -34,10 +34,20 @@ local function safe(fn, ...)
   return nil
 end
 
--- Enum.WeeklyRewardChestThresholdType → readable slot type. Midnight reports the
--- Mythic+/dungeon column as 6 (observed live: raid=1, world=3, dungeon=6); [2] is
--- kept for backwards-compat in case an older/other client still uses it.
-local VAULT_TYPE = { [1] = "raid", [2] = "dungeon", [3] = "world", [4] = "pvp", [6] = "dungeon" }
+-- Enum.WeeklyRewardChestThresholdType → readable slot type. These are the real
+-- engine values, not a guess:
+--   None = 0, Activities = 1, RankedPvP = 2, Raid = 3,
+--   AlsoReceive = 4, Concession = 5, World = 6
+-- (BlizzardInterfaceResources/Resources/LuaEnum.lua). "Activities" is the
+-- Mythic+/dungeon row — Blizzard_ChallengesUI queries it for the M+ vault.
+-- 4 (AlsoReceive) is not a reward row and is deliberately unmapped.
+-- 5 (Concession) is the pair of non-row "take currency instead of gear" choices
+-- shown under the three rows; it IS dumped so the planner can see it.
+--
+-- ⚠ Until schema 11 this map was wrong for every row — it called the dungeon row
+-- "raid", the raid row "world" and the world row "dungeon", and dropped
+-- concessions as a bare 5. Consumers of a schema<=10 dump must remap.
+local VAULT_TYPE = { [1] = "dungeon", [2] = "pvp", [3] = "raid", [5] = "concession", [6] = "world" }
 
 -- Real gear slots (cosmetic shirt=4 / tabard=19 / defunct ranged=18 omitted) →
 -- readable name, for per-slot ilvl scanning (planner v2b weakest-slot targeting).
@@ -536,7 +546,7 @@ local function capture()
              and equipCache or refreshEquip() or {}
 
   PlannerStateDB = {
-    schema = 10,
+    schema = 11,
     updated = safe(GetServerTime) or (time and time()) or 0,
     character = safe(UnitName, "player"),
     realm = safe(GetRealmName),
